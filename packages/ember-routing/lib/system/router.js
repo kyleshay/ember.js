@@ -765,7 +765,7 @@ const EmberRouter = EmberObject.extend(Evented, {
     assign(queryParams, _queryParams);
     this._prepareQueryParams(targetRouteName, models, queryParams, _keepDefaultQueryParamValues);
 
-    let transition = this._routerMicrolib.transitionTo(targetRouteName, ...models, { queryParams });
+    let transition = this._routerMicrolib.transitionTo(targetRouteName, ...(models || []), { queryParams });
 
     didBeginTransition(transition, this);
 

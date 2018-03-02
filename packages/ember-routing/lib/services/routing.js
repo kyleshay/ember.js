@@ -58,7 +58,7 @@ export default Service.extend({
       this.normalizeQueryParams(routeName, models, visibleQueryParams);
     }
 
-    return router.generate(routeName, ...models, { queryParams: visibleQueryParams });
+    return router.generate(routeName, ...(models || []), { queryParams: visibleQueryParams });
   },
 
   isActiveForRoute(contexts, queryParams, routeName, routerState, isCurrentWhenSpecified) {
