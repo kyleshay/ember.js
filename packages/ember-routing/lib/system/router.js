@@ -1086,7 +1086,7 @@ const EmberRouter = EmberObject.extend(Evented, {
   @param {Function} callback
   @return {Void}
  */
-function forEachRouteAbove(handlerInfos, callback) {
+function forEachRouteAbove(originRoute, handlerInfos, callback) {
 
   for (let i = handlerInfos.length - 1; i >= 0; --i) {
     let handlerInfo = handlerInfos[i];
@@ -1099,7 +1099,7 @@ function forEachRouteAbove(handlerInfos, callback) {
     //
     // In both of these cases, we cannot invoke the callback on that specific
     // route, because it just doesn't exist...
-    if (route === undefined) { continue; }
+    if (route !== originRoute || route === undefined) { continue; }
 
     if (callback(route, handlerInfo) !== true) {
       return;
@@ -1116,12 +1116,12 @@ let defaultActionHandlers = {
   },
 
   // Attempt to find an appropriate error route or substate to enter.
-  error(handlerInfos, error, transition) {
+  error(handlerInfos, error, transition, originRoute) {
     let router = this;
 
     let handlerInfoWithError = handlerInfos[handlerInfos.length - 1];
 
-    forEachRouteAbove(handlerInfos, (route, handlerInfo) => {
+    forEachRouteAbove(originRoute, handlerInfos, (route, handlerInfo) => {
       // We don't check the leaf most handlerInfo since that would
       // technically be below where we're at in the route hierarchy.
       if (handlerInfo !== handlerInfoWithError) {
@@ -1156,7 +1156,7 @@ let defaultActionHandlers = {
 
     let handlerInfoWithSlowLoading = handlerInfos[handlerInfos.length - 1];
 
-    forEachRouteAbove(handlerInfos, (route, handlerInfo) => {
+    forEachRouteAbove(originRoute, handlerInfos, (route, handlerInfo) => {
       // We don't check the leaf most handlerInfo since that would
       // technically be below where we're at in the route hierarchy.
       if (handlerInfo !== handlerInfoWithSlowLoading) {
