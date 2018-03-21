@@ -1,6 +1,5 @@
 import { dictionary, assign, intern } from 'ember-utils';
 import { assert, deprecate } from 'ember-debug';
-import { EMBER_MODULE_UNIFICATION } from 'ember/features';
 import Container from './container';
 import { DEBUG } from 'ember-env-flags';
 import { ENV } from 'ember-environment';
@@ -224,7 +223,6 @@ export default class Registry {
    @return {Function} fullName's factory
    */
   resolve(fullName, options) {
-    assert('fullName must be a proper full name', this.isValidFullName(fullName));
     let factory = resolve(this, this.normalize(fullName), options);
     if (factory === undefined && this.fallback !== null) {
       factory = this.fallback.resolve(...arguments);
@@ -322,8 +320,9 @@ export default class Registry {
     }
 
     let source = options && options.source && this.normalize(options.source);
+    let namespace = (options && options.namespace) || undefined;
 
-    return has(this, this.normalize(fullName), source);
+    return has(this, this.normalize(fullName), source, namespace);
   }
 
   /**
@@ -373,7 +372,7 @@ export default class Registry {
    @param {String} fullName
    @param {Object} options
    */
-  options(fullName, options = {}) {
+  options(fullName, options) {
     let normalizedName = this.normalize(fullName);
     this._options[normalizedName] = options;
   }
@@ -391,7 +390,7 @@ export default class Registry {
   getOption(fullName, optionName) {
     let options = this._options[fullName];
 
-    if (options && options[optionName] !== undefined) {
+    if (options !== undefined && options[optionName] !== undefined) {
       return options[optionName];
     }
 
@@ -450,7 +449,7 @@ export default class Registry {
     let injections = this._typeInjections[type] ||
                      (this._typeInjections[type] = []);
 
-    injections.push({ property, fullName });
+    injections.push({ property, specifier: fullName });
   }
 
   /**
@@ -514,7 +513,7 @@ export default class Registry {
     let injections = this._injections[normalizedName] ||
                      (this._injections[normalizedName] = []);
 
-    injections.push({ property, fullName: normalizedInjectionName });
+    injections.push({ property, specifier: normalizedInjectionName });
   }
 
   /**
@@ -551,27 +550,29 @@ export default class Registry {
   }
 
   getInjections(fullName) {
-    let injections = this._injections[fullName] || [];
+    let injections = this._injections[fullName];
     if (this.fallback !== null) {
-      injections = injections.concat(this.fallback.getInjections(fullName));
+      let fallbackInjections = this.fallback.getInjections(fullName);
+
+      if (fallbackInjections !== undefined) {
+        injections = injections === undefined ? fallbackInjections : injections.concat(fallbackInjections);
+      }
     }
+
     return injections;
   }
 
   getTypeInjections(type) {
-    let injections = this._typeInjections[type] || [];
+    let injections = this._typeInjections[type];
     if (this.fallback !== null) {
-      injections = injections.concat(this.fallback.getTypeInjections(type));
+      let fallbackInjections = this.fallback.getTypeInjections(type);
+
+      if (fallbackInjections !== undefined) {
+        injections = injections === undefined ? fallbackInjections : injections.concat(fallbackInjections);
+      }
     }
+
     return injections;
-  }
-
-  resolverCacheKey(name, options) {
-    if (!EMBER_MODULE_UNIFICATION) {
-      return name;
-    }
-
-    return (options && options.source) ? `${options.source}:${name}` : name;
   }
 
   /**
@@ -595,13 +596,12 @@ export default class Registry {
   expandLocalLookup(fullName, options) {
     if (this.resolver !== null && this.resolver.expandLocalLookup) {
       assert('fullName must be a proper full name', this.isValidFullName(fullName));
-      assert('options.source must be provided to expandLocalLookup', options && options.source);
-      assert('options.source must be a proper full name', this.isValidFullName(options.source));
+      assert('options.source must be a proper full name', !options.source || this.isValidFullName(options.source));
 
       let normalizedFullName = this.normalize(fullName);
       let normalizedSource = this.normalize(options.source);
 
-      return expandLocalLookup(this, normalizedFullName, normalizedSource);
+      return expandLocalLookup(this, normalizedFullName, normalizedSource, options.namespace);
     } else if (this.fallback !== null) {
       return this.fallback.expandLocalLookup(fullName, options);
     } else {
@@ -625,11 +625,14 @@ if (DEBUG) {
 
     for (let key in hash) {
       if (hash.hasOwnProperty(key)) {
-        assert(`Expected a proper full name, given '${hash[key]}'`, this.isValidFullName(hash[key]));
+        let { specifier, source, namespace } = hash[key];
+        assert(`Expected a proper full name, given '${specifier}'`, this.isValidFullName(specifier));
 
         injections.push({
           property: key,
-          fullName: hash[key]
+          specifier,
+          source,
+          namespace
         });
       }
     }
@@ -640,17 +643,15 @@ if (DEBUG) {
   Registry.prototype.validateInjections = function(injections) {
     if (!injections) { return; }
 
-    let fullName;
-
     for (let i = 0; i < injections.length; i++) {
-      fullName = injections[i].fullName;
+      let {specifier, source, namespace} = injections[i];
 
-      assert(`Attempting to inject an unknown injection: '${fullName}'`, this.has(fullName));
+      assert(`Attempting to inject an unknown injection: '${specifier}'`, this.has(specifier, {source, namespace}));
     }
   };
 }
 
-function expandLocalLookup(registry, normalizedName, normalizedSource) {
+function expandLocalLookup(registry, normalizedName, normalizedSource, namespace) {
   let cache = registry._localLookupCache;
   let normalizedNameCache = cache[normalizedName];
 
@@ -658,45 +659,36 @@ function expandLocalLookup(registry, normalizedName, normalizedSource) {
     normalizedNameCache = cache[normalizedName] = Object.create(null);
   }
 
-  let cached = normalizedNameCache[normalizedSource];
+  let cacheKey = namespace || normalizedSource;
+
+  let cached = normalizedNameCache[cacheKey];
 
   if (cached !== undefined) { return cached; }
 
-  let expanded = registry.resolver.expandLocalLookup(normalizedName, normalizedSource);
+  let expanded = registry.resolver.expandLocalLookup(normalizedName, normalizedSource, namespace);
 
-  return normalizedNameCache[normalizedSource] = expanded;
+  return normalizedNameCache[cacheKey] = expanded;
 }
 
-function resolve(registry, normalizedName, options) {
-  if (options && options.source) {
-    // when `source` is provided expand normalizedName
-    // and source into the full normalizedName
-    let expandedNormalizedName = registry.expandLocalLookup(normalizedName, options);
-
-    // if expandLocalLookup returns falsey, we do not support local lookup
-    if (!EMBER_MODULE_UNIFICATION) {
-      if (!expandedNormalizedName) {
-        return;
-      }
-
-      normalizedName = expandedNormalizedName;
-    } else if (expandedNormalizedName) {
-      // with ember-module-unification, if expandLocalLookup returns something,
-      // pass it to the resolve without the source
-      normalizedName = expandedNormalizedName;
-      options = {};
+function resolve(registry, _normalizedName, options) {
+  let normalizedName = _normalizedName;
+  // when `source` is provided expand normalizedName
+  // and source into the full normalizedName
+  if (options !== undefined && (options.source || options.namespace)) {
+    normalizedName = registry.expandLocalLookup(_normalizedName, options);
+    if (!normalizedName) {
+      return;
     }
   }
 
-  let cacheKey = registry.resolverCacheKey(normalizedName, options);
-  let cached = registry._resolveCache[cacheKey];
+  let cached = registry._resolveCache[normalizedName];
   if (cached !== undefined) { return cached; }
-  if (registry._failSet.has(cacheKey)) { return; }
+  if (registry._failSet.has(normalizedName)) { return; }
 
   let resolved;
 
   if (registry.resolver) {
-    resolved = registry.resolver.resolve(normalizedName, options && options.source);
+    resolved = registry.resolver.resolve(normalizedName);
   }
 
   if (resolved === undefined) {
@@ -704,16 +696,16 @@ function resolve(registry, normalizedName, options) {
   }
 
   if (resolved === undefined) {
-    registry._failSet.add(cacheKey);
+    registry._failSet.add(normalizedName);
   } else {
-    registry._resolveCache[cacheKey] = resolved;
+    registry._resolveCache[normalizedName] = resolved;
   }
 
   return resolved;
 }
 
-function has(registry, fullName, source) {
-  return registry.resolve(fullName, { source }) !== undefined;
+function has(registry, fullName, source, namespace) {
+  return registry.resolve(fullName, { source, namespace }) !== undefined;
 }
 
 const privateNames = dictionary(null);

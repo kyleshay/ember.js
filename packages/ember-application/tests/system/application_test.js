@@ -135,7 +135,7 @@ moduleFor('Application', class extends ApplicationTestCase {
     verifyInjection(assert, application, 'router', '_bucketCache', P`-bucket-cache:main`);
     verifyInjection(assert, application, 'route', '_bucketCache', P`-bucket-cache:main`);
 
-    verifyInjection(assert, application, 'route', 'router', 'router:main');
+    verifyInjection(assert, application, 'route', '_router', 'router:main');
 
     verifyRegistration(assert, application, 'component:-text-field');
     verifyRegistration(assert, application, 'component:-text-area');
@@ -164,7 +164,7 @@ moduleFor('Application', class extends ApplicationTestCase {
     verifyRegistration(assert, application, P`template:components/-default`);
     verifyRegistration(assert, application, 'template:-outlet');
     verifyInjection(assert, application, 'view:-outlet', 'template', 'template:-outlet');
-    verifyInjection(assert, application, 'template', 'options', P`template-options:main`);
+    verifyInjection(assert, application, 'template', 'compiler', P`template-compiler:main`);
 
     assert.deepEqual(application.registeredOptionsForType('helper'), { instantiate: false }, `optionsForType 'helper'`);
   }

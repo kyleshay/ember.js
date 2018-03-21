@@ -130,10 +130,6 @@ export default class Container {
     return { [OWNER]: this.owner };
   }
 
-  _resolverCacheKey(name, options) {
-    return this.registry.resolverCacheKey(name, options);
-  }
-
   /**
    Given a fullName, return the corresponding factory. The consumer of the factory
    is responsible for the destruction of any factory instances, as there is no
@@ -150,47 +146,19 @@ export default class Container {
     let normalizedName = this.registry.normalize(fullName);
 
     assert('fullName must be a proper full name', this.registry.isValidFullName(normalizedName));
+    assert(
+      'EMBER_MODULE_UNIFICATION must be enabled to pass a namespace option to factoryFor',
+      EMBER_MODULE_UNIFICATION || !options.namespace
+    );
 
-    if (options.source) {
-      let expandedFullName = this.registry.expandLocalLookup(fullName, options);
-      // if expandLocalLookup returns falsey, we do not support local lookup
-      if (!EMBER_MODULE_UNIFICATION) {
-        if (!expandedFullName) {
-          return;
-        }
-
-        normalizedName = expandedFullName;
-      } else if (expandedFullName) {
-        // with ember-module-unification, if expandLocalLookup returns something,
-        // pass it to the resolve without the source
-        normalizedName = expandedFullName;
-        options = {};
+    if (options.source || options.namespace) {
+      normalizedName = this.registry.expandLocalLookup(fullName, options);
+      if (!normalizedName) {
+        return;
       }
     }
 
-    let cacheKey = this._resolverCacheKey(normalizedName, options);
-    let cached = this.factoryManagerCache[cacheKey];
-
-    if (cached !== undefined) { return cached; }
-
-    let factory = EMBER_MODULE_UNIFICATION ? this.registry.resolve(normalizedName, options) : this.registry.resolve(normalizedName);
-
-    if (factory === undefined) {
-      return;
-    }
-
-    if (DEBUG && factory && typeof factory._onLookup === 'function') {
-      factory._onLookup(fullName);
-    }
-
-    let manager = new FactoryManager(this, factory, fullName, normalizedName);
-
-    if (DEBUG) {
-      manager = wrapManagerInDeprecationProxy(manager);
-    }
-
-    this.factoryManagerCache[cacheKey] = manager;
-    return manager;
+    return factoryFor(this, normalizedName, fullName);
   }
 }
 /*
@@ -232,33 +200,54 @@ function isInstantiatable(container, fullName) {
 }
 
 function lookup(container, fullName, options = {}) {
-  if (options.source) {
-    let expandedFullName = container.registry.expandLocalLookup(fullName, options);
+  assert(
+    'EMBER_MODULE_UNIFICATION must be enabled to pass a namespace option to lookup',
+    EMBER_MODULE_UNIFICATION || !options.namespace
+  );
 
-    if (!EMBER_MODULE_UNIFICATION) {
-      // if expandLocalLookup returns falsey, we do not support local lookup
-      if (!expandedFullName) {
-        return;
-      }
+  let normalizedName = fullName;
 
-      fullName = expandedFullName;
-    } else if (expandedFullName) {
-      // with ember-module-unification, if expandLocalLookup returns something,
-      // pass it to the resolve without the source
-      fullName = expandedFullName;
-      options = {};
+  if (options.source || options.namespace) {
+    normalizedName = container.registry.expandLocalLookup(fullName, options);
+    if (!normalizedName) {
+      return;
     }
   }
 
   if (options.singleton !== false) {
-    let cacheKey = container._resolverCacheKey(fullName, options);
-    let cached = container.cache[cacheKey];
+    let cached = container.cache[normalizedName];
     if (cached !== undefined) {
       return cached;
     }
   }
 
-  return instantiateFactory(container, fullName, options);
+  return instantiateFactory(container, normalizedName, fullName, options);
+}
+
+
+function factoryFor(container, normalizedName, fullName) {
+  let cached = container.factoryManagerCache[normalizedName];
+
+  if (cached !== undefined) { return cached; }
+
+  let factory = container.registry.resolve(normalizedName);
+
+  if (factory === undefined) {
+    return;
+  }
+
+  if (DEBUG && factory && typeof factory._onLookup === 'function') {
+    factory._onLookup(fullName); // What should this pass? fullname or the normalized key?
+  }
+
+  let manager = new FactoryManager(container, factory, fullName, normalizedName);
+
+  if (DEBUG) {
+    manager = wrapManagerInDeprecationProxy(manager);
+  }
+
+  container.factoryManagerCache[normalizedName] = manager;
+  return manager;
 }
 
 function isSingletonClass(container, fullName, { instantiate, singleton }) {
@@ -277,8 +266,8 @@ function isFactoryInstance(container, fullName, { instantiate, singleton }) {
   return instantiate !== false && (singleton !== false || isSingleton(container, fullName)) && isInstantiatable(container, fullName);
 }
 
-function instantiateFactory(container, fullName, options) {
-  let factoryManager = EMBER_MODULE_UNIFICATION && options && options.source ? container.factoryFor(fullName, options) : container.factoryFor(fullName);
+function instantiateFactory(container, normalizedName, fullName, options) {
+  let factoryManager = factoryFor(container, normalizedName, fullName);
 
   if (factoryManager === undefined) {
     return;
@@ -287,8 +276,7 @@ function instantiateFactory(container, fullName, options) {
   // SomeClass { singleton: true, instantiate: true } | { singleton: true } | { instantiate: true } | {}
   // By default majority of objects fall into this case
   if (isSingletonInstance(container, fullName, options)) {
-    let cacheKey = container._resolverCacheKey(fullName, options);
-    return container.cache[cacheKey] = factoryManager.create();
+    return container.cache[normalizedName] = factoryManager.create();
   }
 
   // SomeClass { singleton: false, instantiate: true }
@@ -304,34 +292,56 @@ function instantiateFactory(container, fullName, options) {
   throw new Error('Could not create factory');
 }
 
-function buildInjections(container, injections) {
-  let hash = {};
-  let isDynamic = false;
-
-  if (injections.length > 0) {
-    if (DEBUG) {
-      container.registry.validateInjections(injections);
-    }
-
-    let injection;
-    for (let i = 0; i < injections.length; i++) {
-      injection = injections[i];
-      hash[injection.property] = lookup(container, injection.fullName);
-      if (!isDynamic) {
-        isDynamic = !isSingleton(container, injection.fullName);
-      }
-    }
+function processInjections(container, injections, result) {
+  if (DEBUG) {
+    container.registry.validateInjections(injections);
   }
 
-  return { injections: hash, isDynamic };
+  let hash = result.injections;
+  if (hash === undefined) {
+    hash = result.injections = {};
+  }
+
+  for (let i = 0; i < injections.length; i++) {
+    let {property, specifier, source} = injections[i];
+
+    if (source) {
+      hash[property] = lookup(container, specifier, { source });
+    } else {
+      hash[property] = lookup(container, specifier);
+    }
+
+    if (!result.isDynamic) {
+      result.isDynamic = !isSingleton(container, specifier);
+    }
+  }
+}
+
+function buildInjections(container, typeInjections, injections) {
+  let result = {
+    injections: undefined,
+    isDyanmic: false,
+  };
+
+  if (typeInjections !== undefined) {
+    processInjections(container, typeInjections, result);
+  }
+
+  if (injections !== undefined) {
+    processInjections(container, injections, result);
+  }
+
+  return result;
 }
 
 function injectionsFor(container, fullName) {
   let registry = container.registry;
   let [type] = fullName.split(':');
 
-  let injections = registry.getTypeInjections(type).concat(registry.getInjections(fullName));
-  return buildInjections(container, injections);
+  let typeInjections = registry.getTypeInjections(type);
+  let injections = registry.getInjections(fullName);
+
+  return buildInjections(container, typeInjections, injections);
 }
 
 function destroyDestroyables(container) {
@@ -389,7 +399,7 @@ class FactoryManager {
     return this.madeToString;
   }
 
-  create(options = {}) {
+  create(options) {
     let injectionsCache = this.injections;
     if (injectionsCache === undefined) {
       let { injections, isDynamic } = injectionsFor(this.container, this.normalizedName);
@@ -399,7 +409,10 @@ class FactoryManager {
       }
     }
 
-    let props = assign({}, injectionsCache, options);
+    let props = injectionsCache;
+    if (options !== undefined) {
+      props = assign({}, injectionsCache, options);
+    }
 
     if (DEBUG) {
       let lazyInjections;
@@ -431,6 +444,10 @@ class FactoryManager {
       // template instantiation which rely heavily on
       // `options[OWNER]` being passed into `create`
       // TODO: clean this up, and remove in future versions
+      if (options === undefined || props === undefined) {
+        // avoid mutating `props` here since they are the cached injections
+        props = assign({}, props);
+      }
       setOwner(props, this.owner);
     }
 

@@ -1,5 +1,7 @@
 import { moduleFor, RenderingTest } from '../../utils/test-case';
+import { compile } from 'ember-template-compiler';
 import { ModuleBasedTestResolver } from 'internal-test-helpers';
+import { moduleFor as applicationModuleFor, ApplicationTestCase } from 'internal-test-helpers';
 import { Component } from '../../utils/helpers';
 import { EMBER_MODULE_UNIFICATION } from 'ember/features';
 import { helper, Helper } from 'ember-glimmer';
@@ -199,20 +201,29 @@ function buildResolver() {
   let resolver = {
     resolve() { },
     expandLocalLookup(fullName, sourceFullName) {
+      if (!sourceFullName) {
+        return null;
+      }
+
       let [sourceType, sourceName ] = sourceFullName.split(':');
       let [type, name ] = fullName.split(':');
 
-      if (type !== 'template' && sourceType === 'template' && sourceName.slice(0, 11) === 'components/') {
-        sourceName = sourceName.slice(11);
+      sourceName = sourceName.replace('my-app/', '');
+
+      if (sourceType === 'template' && sourceName.slice(0, 21) === 'templates/components/') {
+        sourceName = sourceName.slice(21);
       }
 
-      if (type === 'template' && sourceType === 'template' && name.slice(0, 11) === 'components/') {
+      name = name.replace('my-app/', '');
+
+      if (type === 'template' && name.slice(0, 11) === 'components/') {
         name = name.slice(11);
+        sourceName = `components/${sourceName}`;
       }
 
+      sourceName = sourceName.replace('.hbs', '');
 
       let result = `${type}:${sourceName}/${name}`;
-
       return result;
     }
   };
@@ -228,21 +239,17 @@ moduleFor('Components test: local lookup with expandLocalLookup feature', class 
 
 if (EMBER_MODULE_UNIFICATION) {
   class LocalLookupTestResolver extends ModuleBasedTestResolver {
-    resolve(specifier, referrer) {
-      let fullSpecifier = specifier;
+    expandLocalLookup(specifier, source) {
+      if (source && source.indexOf('components/') !== -1) {
+        let namespace = source.split('components/')[1];
+        let [type, name] = specifier.split(':');
+        name = name.replace('components/', '');
 
-      if (referrer) {
-        let namespace = referrer.split('template:components/')[1];
-        if (specifier.indexOf('template:components/') !== -1) {
-            let name = specifier.split('template:components/')[1];
-            fullSpecifier = `template:components/${namespace}/${name}`;
-        } else if (specifier.indexOf(':') !== -1) {
-          let [type, name] = specifier.split(':');
-          fullSpecifier = `${type}:${namespace}/${name}`;
-        }
+        namespace = namespace.replace('.hbs', '');
+        return `${type}:${type === 'template' ? 'components/' : ''}${namespace}/${name}`;
       }
 
-      return super.resolve(fullSpecifier);
+      return super.expandLocalLookup(specifier, source);
     }
   }
 
@@ -272,7 +279,7 @@ if (EMBER_MODULE_UNIFICATION) {
 
       if (typeof template === 'string') {
         resolver.add(`template:components/${name}`, this.compile(template, {
-          moduleName: `components/${name}`
+          moduleName: `my-name/templates/components/${name}.hbs`
         }));
       }
     }
@@ -281,7 +288,7 @@ if (EMBER_MODULE_UNIFICATION) {
       let { resolver } = this;
       if (typeof template === 'string') {
         resolver.add(`template:${name}`, this.compile(template, {
-          moduleName: name
+          moduleName: `my-name/templates/${name}.hbs`
         }));
       } else {
         throw new Error(`Registered template "${name}" must be a string`);
@@ -299,6 +306,36 @@ if (EMBER_MODULE_UNIFICATION) {
       } else {
         throw new Error(`Cannot register ${funcOrClassBody} as a helper`);
       }
+    }
+  });
+}
+
+if (EMBER_MODULE_UNIFICATION) {
+  applicationModuleFor('Components test: local lookup with resolution referrer (MU)', class extends ApplicationTestCase {
+    ['@test Ensure that the same specifier with two sources does not share a cache key'](assert) {
+      this.add({
+        specifier: 'template:components/x-not-shared',
+        source: 'template:my-app/templates/components/x-top.hbs'
+      }, compile('child-x-not-shared'));
+
+      this.add({
+        specifier: 'template:components/x-top',
+        source: 'template:my-app/templates/application.hbs'
+      }, compile('top-level-x-top ({{x-not-shared}})', { moduleName: 'my-app/templates/components/x-top.hbs' }));
+
+      this.add({
+        specifier: 'template:components/x-not-shared',
+        source: 'template:my-app/templates/application.hbs'
+      }, compile('top-level-x-not-shared'));
+
+      this.addTemplate('application', '{{x-not-shared}} {{x-top}} {{x-not-shared}} {{x-top}}');
+
+      return this.visit('/').then(() => {
+        assert.equal(
+          this.element.textContent,
+          'top-level-x-not-shared top-level-x-top (child-x-not-shared) top-level-x-not-shared top-level-x-top (child-x-not-shared)'
+        );
+      });
     }
   });
 }

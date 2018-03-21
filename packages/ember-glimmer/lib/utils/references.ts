@@ -41,6 +41,8 @@ import {
 import emberToBool from './to-bool';
 
 export const UPDATE = symbol('UPDATE');
+export const INVOKE = symbol('INVOKE');
+export const ACTION = symbol('ACTION');
 
 let maybeFreeze: (obj: any) => void;
 if (DEBUG) {
@@ -89,7 +91,7 @@ export class CachedReference extends EmberPathReference {
   value() {
     let { tag, _lastRevision, _lastValue } = this;
 
-    if (!_lastRevision || !tag.validate(_lastRevision)) {
+    if (_lastRevision === null || !tag.validate(_lastRevision)) {
       _lastValue = this._lastValue = this.compute();
       this._lastRevision = tag.value();
     }
@@ -442,6 +444,28 @@ export class UnboundReference<T> extends ConstReference<T> {
 
   get(key: string) {
     return valueToRef(get(this.inner, key), false);
+  }
+}
+
+export class ReadonlyReference extends CachedReference {
+  constructor(private inner: VersionedPathReference<Opaque>) {
+    super();
+  }
+
+  get tag() {
+    return this.inner.tag;
+  }
+
+  get [INVOKE]() {
+    return this.inner[INVOKE];
+  }
+
+  value() {
+    return this.inner.value();
+  }
+
+  get(key: string) {
+    return this.inner.get(key);
   }
 }
 

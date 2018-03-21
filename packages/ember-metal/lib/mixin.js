@@ -50,9 +50,8 @@ const CONTINUE = {};
 
 function mixinProperties(mixinsMeta, mixin) {
   if (mixin instanceof Mixin) {
-    let guid = guidFor(mixin);
-    if (mixinsMeta.peekMixins(guid)) { return CONTINUE; }
-    mixinsMeta.writeMixins(guid, mixin);
+    if (mixinsMeta.hasMixin(mixin)) { return CONTINUE; }
+    mixinsMeta.addMixin(mixin);
     return mixin.properties;
   } else {
     return mixin; // apply anonymous mixin properties
@@ -465,6 +464,10 @@ export default class Mixin {
     }
   }
 
+  static _apply() {
+    return applyMixin(...arguments);
+  }
+
   static applyPartial(obj, ...args) {
     return applyMixin(obj, args, true);
   }
@@ -490,7 +493,7 @@ export default class Mixin {
     let ret = [];
     if (meta === undefined) { return ret; }
 
-    meta.forEachMixins((key, currentMixin) => {
+    meta.forEachMixins((currentMixin) => {
       // skip primitive mixins since these are always anonymous
       if (!currentMixin.properties) { ret.push(currentMixin); }
     });
@@ -557,10 +560,10 @@ export default class Mixin {
   */
   detect(obj) {
     if (typeof obj !== 'object' || obj === null) { return false; }
-    if (obj instanceof Mixin) { return _detect(obj, this, {}); }
+    if (obj instanceof Mixin) { return _detect(obj, this); }
     let meta = peekMeta(obj);
     if (meta === undefined) { return false; }
-    return !!meta.peekMixins(guidFor(this));
+    return meta.hasMixin(this);
   }
 
   without(...args) {
@@ -570,17 +573,15 @@ export default class Mixin {
   }
 
   keys() {
-    let keys = {};
-    let seen = {};
+    return _keys(this);
+  }
 
-    _keys(keys, this, seen);
-    let ret = Object.keys(keys);
-    return ret;
+  toString() {
+    return '(unknown mixin)';
   }
 
 }
 
-Mixin._apply = applyMixin;
 if (ENV._ENABLE_BINDING_SUPPORT) {
   // slotting this so that the legacy addon can add the function here
   // without triggering an error due to the Object.seal done below
@@ -588,11 +589,8 @@ if (ENV._ENABLE_BINDING_SUPPORT) {
   Mixin.detectBinding = null;
 }
 
-let MixinPrototype = Mixin.prototype;
-MixinPrototype.toString = Object.toString;
-
 if (DEBUG) {
-  Object.seal(MixinPrototype);
+  Object.seal(Mixin.prototype);
 }
 
 let unprocessedFlag = false;
@@ -605,34 +603,33 @@ export function clearUnprocessedMixins() {
   unprocessedFlag = false;
 }
 
-function _detect(curMixin, targetMixin, seen) {
-  let guid = guidFor(curMixin);
-
-  if (seen[guid]) { return false; }
-  seen[guid] = true;
+function _detect(curMixin, targetMixin, seen = new Set()) {
+  if (seen.has(curMixin)) { return false; }
+  seen.add(curMixin);
 
   if (curMixin === targetMixin) { return true; }
   let mixins = curMixin.mixins;
-  let loc = mixins ? mixins.length : 0;
-  while (--loc >= 0) {
-    if (_detect(mixins[loc], targetMixin, seen)) { return true; }
+  if (mixins) {
+    return mixins.some((mixin)=> _detect(mixin, targetMixin, seen));
   }
+
   return false;
 }
 
-function _keys(ret, mixin, seen) {
-  if (seen[guidFor(mixin)]) { return; }
-  seen[guidFor(mixin)] = true;
+function _keys(mixin, ret = new Set(), seen = new Set()) {
+  if (seen.has(mixin)) { return; }
+  seen.add(mixin);
 
   if (mixin.properties) {
     let props = Object.keys(mixin.properties);
     for (let i = 0; i < props.length; i++) {
-      let key = props[i];
-      ret[key] = true;
+      ret.add(props[i]);
     }
   } else if (mixin.mixins) {
-    mixin.mixins.forEach((x) => _keys(ret, x, seen));
+    mixin.mixins.forEach((x) => _keys(x, ret, seen));
   }
+
+  return ret;
 }
 
 const REQUIRED = new Descriptor();

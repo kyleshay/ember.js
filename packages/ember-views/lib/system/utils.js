@@ -48,10 +48,10 @@ export function getRootViews(owner) {
   @param {Ember.View} view
  */
 export function getViewId(view) {
-  if (view.tagName === '') {
-    return guidFor(view);
+  if (view.tagName !== '' && view.elementId) {
+    return view.elementId;
   } else {
-    return view.elementId || guidFor(view);
+    return guidFor(view);
   }
 }
 
@@ -74,7 +74,7 @@ export function setViewElement(view, element) {
   return view[VIEW_ELEMENT] = element;
 }
 
-const CHILD_VIEW_IDS = symbol('CHILD_VIEW_IDS');
+const CHILD_VIEW_IDS = new WeakMap();
 
 /**
   @private
@@ -88,27 +88,32 @@ export function getChildViews(view) {
 }
 
 export function initChildViews(view) {
-  view[CHILD_VIEW_IDS] = [];
+  let childViews = new Set();
+  CHILD_VIEW_IDS.set(view, childViews);
+  return childViews;
 }
 
 export function addChildView(parent, child) {
-  parent[CHILD_VIEW_IDS].push(getViewId(child));
+  let childViews = CHILD_VIEW_IDS.get(parent);
+  if (childViews === undefined) {
+    childViews = initChildViews(parent);
+  }
+
+  childViews.add(getViewId(child));
 }
 
 export function collectChildViews(view, registry) {
-  let ids = [];
   let views = [];
+  let childViews = CHILD_VIEW_IDS.get(view);
 
-  view[CHILD_VIEW_IDS].forEach(id => {
-    let view = registry[id];
-
-    if (view && !view.isDestroying && !view.isDestroyed && ids.indexOf(id) === -1) {
-      ids.push(id);
-      views.push(view);
-    }
-  });
-
-  view[CHILD_VIEW_IDS] = ids;
+  if (childViews !== undefined) {
+    childViews.forEach(id => {
+      let view = registry[id];
+      if (view && !view.isDestroying && !view.isDestroyed) {
+        views.push(view);
+      }
+    });
+  }
 
   return views;
 }

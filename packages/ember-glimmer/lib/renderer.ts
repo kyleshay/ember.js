@@ -41,7 +41,7 @@ export type IBuilder = (env: Environment, cursor: Cursor) => ElementBuilder;
 
 export class DynamicScope implements GlimmerDynamicScope {
   constructor(
-    public view: Component | null,
+    public view: Component | {} | null,
     public outletState: VersionedPathReference<OutletState | undefined>,
     public rootOutletState?: VersionedPathReference<OutletState | undefined>) {
   }
@@ -101,7 +101,7 @@ class RootState {
     this.render = () => {
       let layout = template.asLayout();
       let handle = layout.compile();
-      let iterator = renderMain(layout['options'].program,
+      let iterator = renderMain(layout['compiler'].program,
         env,
         self,
         dynamicScope,

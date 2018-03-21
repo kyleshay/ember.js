@@ -1,5 +1,19 @@
 # Ember Changelog
 
+### v3.1.0-beta.5 (March 12, 2018)
+- [#15601](https://github.com/emberjs/ember.js/pull/15601) [BUGFIX] Ensure Mixin.prototype.toString does not return constructor code
+- [#16326](https://github.com/emberjs/ember.js/pull/16326) [BUGFIX] Expanded syntax error for if handlebars helper to include source of error
+- [#16347](https://github.com/emberjs/ember.js/pull/16347) [BUGFIX] Adds toJSON to list of descriptorTrap assertion exception
+- [#16350](https://github.com/emberjs/ember.js/pull/16350) [BUGFIX] Fix initialiters tests blueprints
+- [#16351](https://github.com/emberjs/ember.js/pull/16351) [BUGFIX] Bring RSVP.cast back from the dead
+- [#16365](https://github.com/emberjs/ember.js/pull/16365) [BUGFIX] Fold all trap methods together
+
+### v3.1.0-beta.4 (March 5, 2018)
+- [#16294](https://github.com/emberjs/ember.js/pull/16294) [BUGFIX] Fix input macro params handling
+- [#16297](https://github.com/emberjs/ember.js/pull/16297) [BUGFIX] Revert "Update to backburner.js@2.2.0."
+- [#16299](https://github.com/emberjs/ember.js/pull/16299) [BUGFIX] Revert "[CLEANUP] Remove ':change' suffix on change events"
+- [#16307](https://github.com/emberjs/ember.js/pull/16307) [BUGFIX] Ensure proper .toString() of default components.
+
 ### v3.1.0-beta.3 (February 26, 2018)
 - [#16271](https://github.com/emberjs/ember.js/pull/16271) [BUGFIX] Fix ChainNode unchaining
 - [#16274](https://github.com/emberjs/ember.js/pull/16274) [BUGFIX] Ensure accessing a "proxy" itself does not error.
@@ -85,6 +99,10 @@
 - [#16015](https://github.com/emberjs/ember.js/pull/16015) [CLEANUP] Convert ember-router tests to new style
 - [#16036](https://github.com/emberjs/ember.js/pull/16036) [CLEANUP] Convert ember-metal accessors tests to new style
 - [#16023](https://github.com/emberjs/ember.js/pull/16023) Make event dispatcher work without jQuery
+
+### 2.18.2 (February 14, 2018)
+
+- [#16245](https://github.com/emberjs/ember.js/pull/16245) [BUGFIX] Ensure errors in deferred component hooks can be recovered.
 
 ### 2.18.1 (February 13, 2018)
 

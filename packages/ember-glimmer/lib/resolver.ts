@@ -4,9 +4,9 @@ import {
   Option,
   RuntimeResolver as IRuntimeResolver
 } from '@glimmer/interfaces';
-import { LazyOpcodeBuilder, Macros, OpcodeBuilderConstructor, PartialDefinition, TemplateOptions } from '@glimmer/opcode-compiler';
-import { LazyConstants, Program } from '@glimmer/program';
+import { LazyCompiler, Macros, PartialDefinition } from '@glimmer/opcode-compiler';
 import {
+  ComponentManager,
   getDynamicVar,
   Helper,
   ModifierManager,
@@ -21,8 +21,11 @@ import {
   lookupPartial,
   OwnedTemplateMeta,
 } from 'ember-views';
+import { EMBER_MODULE_UNIFICATION, GLIMMER_CUSTOM_COMPONENT_MANAGER } from 'ember/features';
 import CompileTimeLookup from './compile-time-lookup';
 import { CurlyComponentDefinition } from './component-managers/curly';
+import CustomComponentManager, { CustomComponentState } from './component-managers/custom';
+import DefinitionState from './component-managers/definition-state';
 import { TemplateOnlyComponentDefinition } from './component-managers/template-only';
 import { isHelperFactory, isSimpleHelper } from './helper';
 import { default as classHelper } from './helpers/-class';
@@ -46,14 +49,19 @@ import { mountHelper } from './syntax/mount';
 import { outletHelper } from './syntax/outlet';
 import { renderHelper } from './syntax/render';
 import { Factory as TemplateFactory, Injections, OwnedTemplate } from './template';
+import ComponentStateBucket from './utils/curly-component-state-bucket';
+import getCustomComponentManager from './utils/custom-component-manager';
 import { ClassBasedHelperReference, SimpleHelperReference } from './utils/references';
 
 function instrumentationPayload(name: string) {
   return { object: `component:${name}` };
 }
 
-function makeOptions(moduleName: string) {
-  return moduleName !== undefined ? { source: `template:${moduleName}`} : undefined;
+function makeOptions(moduleName: string, namespace?: string): LookupOptions {
+  return {
+    source: moduleName !== undefined ? `template:${moduleName}` : undefined,
+    namespace
+  };
 }
 
 const BUILTINS_HELPERS = {
@@ -84,12 +92,7 @@ const BUILTIN_MODIFIERS = {
 };
 
 export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMeta> {
-  public templateOptions: TemplateOptions<OwnedTemplateMeta> = {
-    program: new Program<OwnedTemplateMeta>(new LazyConstants(this)),
-    macros: new Macros(),
-    resolver: new CompileTimeLookup(this),
-    Builder: LazyOpcodeBuilder as OpcodeBuilderConstructor,
-  };
+  public compiler: LazyCompiler<OwnedTemplateMeta>;
 
   private handles: any[] = [
     undefined, // ensure no falsy handle
@@ -111,7 +114,13 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
   public templateCacheMisses = 0;
 
   constructor() {
-    populateMacros(this.templateOptions.macros);
+    let macros = new Macros();
+    populateMacros(macros);
+    this.compiler = new LazyCompiler<OwnedTemplateMeta>(
+      new CompileTimeLookup(this),
+      this,
+      macros
+    );
   }
 
   /***  IRuntimeResolver ***/
@@ -119,13 +128,17 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
   /**
    * Called while executing Append Op.PushDynamicComponentManager if string
    */
-  lookupComponent(name: string, meta: OwnedTemplateMeta): Option<ComponentDefinition> {
-    let handle = this.lookupComponentDefinition(name, meta);
+  lookupComponentDefinition(name: string, meta: OwnedTemplateMeta): Option<ComponentDefinition> {
+    let handle = this.lookupComponentHandle(name, meta);
     if (handle === null) {
       assert(`Could not find component named "${name}" (no component or template with that name was found)`);
       return null;
     }
     return this.resolve(handle);
+  }
+
+  lookupComponentHandle(name: string, meta: OwnedTemplateMeta) {
+    return this.handle(this._lookupComponentDefinition(name, meta));
   }
 
   /**
@@ -145,13 +158,6 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
       return this.handle(handle);
     }
     return null;
-  }
-
-  /**
-   * Called by CompileTimeLookup compiling the Component OpCode
-   */
-  lookupComponentDefinition(name: string, meta: OwnedTemplateMeta): Option<number> {
-    return this.handle(this._lookupComponentDefinition(name, meta));
   }
 
   /**
@@ -184,7 +190,8 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
     }
     let template = cache.get(factory);
     if (template === undefined) {
-      const injections: Injections = { options: this.templateOptions };
+      const { compiler } = this;
+      const injections: Injections = { compiler };
       setOwner(injections, owner);
       template = factory.create(injections);
       cache.set(factory, template);
@@ -208,15 +215,23 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
     return handle;
   }
 
-  private _lookupHelper(name: string, meta: OwnedTemplateMeta): Option<Helper> {
-    const helper = this.builtInHelpers[name];
+  private _lookupHelper(_name: string, meta: OwnedTemplateMeta): Option<Helper> {
+    const helper = this.builtInHelpers[_name];
     if (helper !== undefined) {
       return helper;
     }
 
     const { owner, moduleName } = meta;
 
-    const options: LookupOptions | undefined = makeOptions(moduleName);
+    let name = _name;
+    let namespace = undefined;
+    if (EMBER_MODULE_UNIFICATION) {
+      const parsed = this._parseNameForNamespace(_name);
+      name = parsed.name;
+      namespace = parsed.namespace;
+    }
+
+    const options: LookupOptions = makeOptions(moduleName, namespace);
 
     const factory = owner.factoryFor(`helper:${name}`, options) || owner.factoryFor(`helper:${name}`);
 
@@ -257,18 +272,43 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
     return null;
   }
 
-  private _lookupComponentDefinition(name: string, meta: OwnedTemplateMeta): Option<ComponentDefinition> {
-    let { layout, component } = lookupComponent(meta.owner, name, makeOptions(meta.moduleName));
+  private _parseNameForNamespace(_name: string) {
+    let name = _name;
+    let namespace = undefined;
+    let namespaceDelimiterOffset = _name.indexOf('::');
+    if (namespaceDelimiterOffset !== -1) {
+      name = _name.slice(namespaceDelimiterOffset+2);
+      namespace = _name.slice(0, namespaceDelimiterOffset);
+    }
+
+    return {name, namespace};
+  }
+
+  private _lookupComponentDefinition(_name: string, meta: OwnedTemplateMeta): Option<ComponentDefinition> {
+    let name = _name;
+    let namespace = undefined;
+    if (EMBER_MODULE_UNIFICATION) {
+      const parsed = this._parseNameForNamespace(_name);
+      name = parsed.name;
+      namespace = parsed.namespace;
+    }
+    let { layout, component } = lookupComponent(meta.owner, name, makeOptions(meta.moduleName, namespace));
 
     if (layout && !component && ENV._TEMPLATE_ONLY_GLIMMER_COMPONENTS) {
       return new TemplateOnlyComponentDefinition(layout);
+    }
+
+    let manager: ComponentManager<ComponentStateBucket, DefinitionState> | CustomComponentManager<CustomComponentState<any>> | undefined;
+
+    if (GLIMMER_CUSTOM_COMPONENT_MANAGER && component && component.class) {
+      manager = getCustomComponentManager(meta.owner, component.class);
     }
 
     let finalizer = _instrumentStart('render.getComponentDefinition', instrumentationPayload, name);
     let definition = (layout || component) ?
       new CurlyComponentDefinition(
         name,
-        undefined,
+        manager,
         component || meta.owner.factoryFor(P`component:-default`),
         null,
         layout
